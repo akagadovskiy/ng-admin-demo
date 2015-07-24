@@ -4,12 +4,6 @@
 
     var app = angular.module('myApp', ['ng-admin']);
 
-    app.controller('main', function ($scope, $rootScope, $location) {
-        $rootScope.$on('$stateChangeSuccess', function () {
-            $scope.displayBanner = $location.$$path === '/dashboard';
-        });
-    });
-
     app.config(['NgAdminConfigurationProvider', 'RestangularProvider', function (NgAdminConfigurationProvider, RestangularProvider) {
         var nga = NgAdminConfigurationProvider;
 
@@ -49,13 +43,13 @@
 
         var admin = nga.application('ng-admin backend demo') // application main title
             .debug(false) // debug disabled
-            .baseApiUrl('http://ng-admin.marmelab.com:8000/'); // main API endpoint
+            .baseApiUrl('http://localhost:3000/'); // main API endpoint
 
         // define all entities at the top to allow references between them
-        var post = nga.entity('posts'); // the API endpoint for posts will be http://ng-admin.marmelab.com:8000posts/:id
+        var post = nga.entity('posts'); // the API endpoint for posts will be http://localhost:3000/posts/:id
 
         var comment = nga.entity('comments')
-            .baseApiUrl('http://ng-admin.marmelab.com:8000/') // The base API endpoint can be customized by entity
+            .baseApiUrl('http://localhost:3000/') // The base API endpoint can be customized by entity
             .identifier(nga.field('id')); // you can optionally customize the identifier used in the api ('id' by default)
 
         var tag = nga.entity('tags')
@@ -68,6 +62,14 @@
             .addEntity(comment);
 
         // customize entities and views
+
+        post.dashboardView() // customize the dashboard panel for this entity
+            .name('posts')
+            .title('Recent posts')
+            .order(1) // display the post panel first in the dashboard
+            .perPage(5) // limit the panel to the 5 latest posts
+            .fields([nga.field('title').isDetailLink(true).map(truncate)]); // fields() called with arguments add fields to the view
+
         post.listView()
             .title('All posts') // default title is "[Entity_name] list"
             .description('List of posts with infinite pagination') // description appears under the title
@@ -120,10 +122,6 @@
                 nga.field('tags', 'reference_many') // ReferenceMany translates to a select multiple
                     .targetEntity(tag)
                     .targetField(nga.field('name'))
-                    .filters(function(search) {
-                        return search ? { q: search } : null;
-                    })
-                    .remoteComplete(true, { refreshDelay: 300 })
                     .cssClasses('col-sm-4'), // customize look and feel through CSS classes
                 nga.field('pictures', 'json'),
                 nga.field('views', 'number')
@@ -152,6 +150,20 @@
                     .template('<send-email post="entry"></send-email>')
             ]);
 
+        comment.dashboardView()
+            .title('Last comments')
+            .order(2) // display the comment panel second in the dashboard
+            .perPage(5)
+            .fields([
+                nga.field('id'),
+                nga.field('body', 'wysiwyg')
+                    .label('Comment')
+                    .stripTags(true)
+                    .map(truncate),
+                nga.field(null, 'template') // template fields don't need a name in dashboard view
+                    .label('')
+                    .template('<post-link entry="entry"></post-link>') // you can use custom directives, too
+            ]);
 
         comment.listView()
             .title('Comments')
@@ -159,8 +171,7 @@
             .fields([
                 nga.field('created_at', 'date')
                     .label('Posted'),
-                nga.field('author.name')
-                    .label('Author'),
+                nga.field('author'),
                 nga.field('body', 'wysiwyg')
                     .stripTags(true)
                     .map(truncate),
@@ -171,18 +182,25 @@
                     .targetField(nga.field('title').map(truncate))
             ])
             .filters([
-                nga.field('q', 'template')
-                    .label('')
-                    .pinned(true)
-                    .template('<div class="input-group"><input type="text" ng-model="value" placeholder="Search" class="form-control"></input><span class="input-group-addon"><i class="glyphicon glyphicon-search"></i></span></div>'),
+                nga.field('q', 'string').label('').attributes({'placeholder': 'Global Search'}),
                 nga.field('created_at', 'date')
                     .label('Posted')
                     .attributes({'placeholder': 'Filter by date'}),
+                nga.field('today', 'boolean').map(function() {
+                    var now = new Date(),
+                        year = now.getFullYear(),
+                        month = now.getMonth() + 1,
+                        day = now.getDate();
+                    month = month < 10 ? '0' + month : month;
+                    day = day < 10 ? '0' + day : day;
+                    return {
+                        created_at: [year, month, day].join('-') // ?created_at=... will be appended to the API call
+                    };
+                }),
                 nga.field('post_id', 'reference')
                     .label('Post')
                     .targetEntity(post)
                     .targetField(nga.field('title'))
-                    .remoteComplete(true, { refreshDelay: 300 })
             ])
             .listActions(['edit', 'delete']);
 
@@ -191,25 +209,14 @@
                 nga.field('created_at', 'date')
                     .label('Posted')
                     .defaultValue(new Date()), // preset fields in creation view with defaultValue
-                nga.field('author.name')
-                    .label('Author'),
+                nga.field('author'),
                 nga.field('body', 'wysiwyg'),
                 nga.field('post_id', 'reference')
                     .label('Post')
                     .map(truncate)
-                    .filters(function(search) {
-                        if (!search) {
-                            return;
-                        }
-
-                        return {
-                            q: search // Full-text search
-                        };
-                    })
                     .targetEntity(post)
                     .targetField(nga.field('title'))
-                    .validation({ required: true })
-                    .remoteComplete(true, { refreshDelay: 0 })
+                    .validation({ required: true }),
             ]);
 
         comment.editionView()
@@ -222,6 +229,15 @@
         comment.deletionView()
             .title('Deletion confirmation'); // customize the deletion confirmation message
 
+        tag.dashboardView()
+            .title('Recent tags')
+            .order(3)
+            .perPage(10)
+            .fields([
+                nga.field('id'),
+                nga.field('name'),
+                nga.field('published', 'boolean').label('Is published ?')
+            ]);
 
         tag.listView()
             .infinitePagination(false) // by default, the list view uses infinite pagination. Set to false to use regulat pagination
@@ -265,95 +281,6 @@
             .addChild(nga.menu().title('Other')
                 .addChild(nga.menu().title('Stats').icon('').link('/stats'))
             )
-        );
-
-        // customize dashboard
-        var customDashboardTemplate =
-        '<div class="row dashboard-starter"></div>' +
-        '<div class="row dashboard-content"><div class="col-lg-12"><div class="alert alert-info">' +
-            'Welcome to the demo! Fell free to explore and modify the data. We reset it every few minutes.' +
-        '</div></div></div>' +
-        '<div class="row dashboard-content">' +
-            '<div class="col-lg-12">' +
-                '<div class="panel panel-default">' +
-                    '<ma-dashboard-panel collection="dashboardController.collections.comments" entries="dashboardController.entries.comments"></ma-dashboard-panel>' +
-                '</div>' +
-            '</div>' +
-        '</div>' +
-        '<div class="row dashboard-content">' +
-            '<div class="col-lg-6">' +
-                '<div class="panel panel-green">' +
-                    '<ma-dashboard-panel collection="dashboardController.collections.recent_posts" entries="dashboardController.entries.recent_posts"></ma-dashboard-panel>' +
-                '</div>' +
-                '<div class="panel panel-green">' +
-                    '<ma-dashboard-panel collection="dashboardController.collections.popular_posts" entries="dashboardController.entries.popular_posts"></ma-dashboard-panel>' +
-                '</div>' +
-            '</div>' +
-            '<div class="col-lg-6">' +
-                '<div class="panel panel-yellow">' +
-                    '<ma-dashboard-panel collection="dashboardController.collections.tags" entries="dashboardController.entries.tags"></ma-dashboard-panel>' +
-                '</div>' +
-            '</div>' +
-        '</div>';
-        admin.dashboard(nga.dashboard()
-            .addCollection(nga.collection(post)
-                .name('recent_posts')
-                .title('Recent posts')
-                .perPage(5) // limit the panel to the 5 latest posts
-                .fields([
-                    nga.field('published_at', 'date').label('Published').format('MMM d'),
-                    nga.field('title').isDetailLink(true).map(truncate),
-                    nga.field('views', 'number')
-                ])
-                .sortField('published_at')
-                .sortDir('DESC')
-                .order(1)
-            )
-            .addCollection(nga.collection(post)
-                .name('popular_posts')
-                .title('Popular posts')
-                .perPage(5) // limit the panel to the 5 latest posts
-                .fields([
-                    nga.field('published_at', 'date').label('Published').format('MMM d'),
-                    nga.field('title').isDetailLink(true).map(truncate),
-                    nga.field('views', 'number')
-                ])
-                .sortField('views')
-                .sortDir('DESC')
-                .order(3)
-            )
-            .addCollection(nga.collection(comment)
-                .title('Last comments')
-                .perPage(10)
-                .fields([
-                    nga.field('created_at', 'date')
-                        .label('Posted'),
-                    nga.field('body', 'wysiwyg')
-                        .label('Comment')
-                        .stripTags(true)
-                        .map(truncate)
-                        .isDetailLink(true),
-                    nga.field('post_id', 'reference')
-                        .label('Post')
-                        .map(truncate)
-                        .targetEntity(post)
-                        .targetField(nga.field('title').map(truncate))
-                ])
-                .sortField('created_at')
-                .sortDir('DESC')
-                .order(2)
-            )
-            .addCollection(nga.collection(tag)
-                .title('Tags publication status')
-                .perPage(10)
-                .fields([
-                    nga.field('name'),
-                    nga.field('published', 'boolean').label('Is published ?')
-                ])
-                .listActions(['show'])
-                .order(4)
-            )
-            .template(customDashboardTemplate)
         );
 
         nga.configure(admin);
