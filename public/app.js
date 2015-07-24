@@ -10,7 +10,7 @@
         });
     });
 
-    app.config(function (NgAdminConfigurationProvider, RestangularProvider) {
+    app.config(['NgAdminConfigurationProvider', 'RestangularProvider', function (NgAdminConfigurationProvider, RestangularProvider) {
         var nga = NgAdminConfigurationProvider;
 
         function truncate(value) {
@@ -34,7 +34,9 @@
                 // custom sort params
                 if (params._sortField) {
                     params._sort = params._sortField;
+                    params._order = params._sortDir;
                     delete params._sortField;
+                    delete params._sortDir;
                 }
                 // custom filters
                 if (params._filters) {
@@ -48,13 +50,14 @@
         });
 
         var admin = nga.application('ng-admin backend demo') // application main title
-            .baseApiUrl('http://ng-admin.marmelab.com:8000/'); // main API endpoint
+            .debug(false) // debug disabled
+            .baseApiUrl('http://ng-admin.marmelab.com:8000'); // main API endpoint
 
         // define all entities at the top to allow references between them
-        var post = nga.entity('posts'); // the API endpoint for posts will be http://localhost:3000/posts/:id
+        var post = nga.entity('posts'); // the API endpoint for posts will be http://ng-admin.marmelab.com:8000posts/:id
 
         var comment = nga.entity('comments')
-            .baseApiUrl('http://ng-admin.marmelab.com:8000/') // The base API endpoint can be customized by entity
+            .baseApiUrl('http://ng-admin.marmelab.com:8000') // The base API endpoint can be customized by entity
             .identifier(nga.field('id')); // you can optionally customize the identifier used in the api ('id' by default)
 
         var tag = nga.entity('tags')
@@ -67,21 +70,15 @@
             .addEntity(comment);
 
         // customize entities and views
-
-        post.dashboardView() // customize the dashboard panel for this entity
-            .title('Recent posts')
-            .order(1) // display the post panel first in the dashboard
-            .perPage(5) // limit the panel to the 5 latest posts
-            .fields([nga.field('title').isDetailLink(true).map(truncate)]); // fields() called with arguments add fields to the view
-
         post.listView()
             .title('All posts') // default title is "[Entity_name] list"
             .description('List of posts with infinite pagination') // description appears under the title
             .infinitePagination(true) // load pages as the user scrolls
             .fields([
-                nga.field('id').label('ID'), // The default displayed name is the camelCase field name. label() overrides id
+                nga.field('id').label('id'), // The default displayed name is the camelCase field name. label() overrides id
                 nga.field('title'), // the default list field type is "string", and displays as a string
-                nga.field('published_at', 'date'), // Date field type allows date formatting
+                nga.field('published_at', 'date'),  // Date field type allows date formatting
+                nga.field('average_note', 'float'), // Float type also displays decimal digits
                 nga.field('views', 'number'),
                 nga.field('tags', 'reference_many') // a Reference is a particular type of field that references another entity
                     .targetEntity(tag) // the tag entity is defined later in this file
@@ -99,25 +96,51 @@
                 nga.field('published_at', 'date') // Date field type translates to a datepicker
             ]);
 
+        var subCategories = [
+            { category: 'tech', label: 'Computers', value: 'computers' },
+            { category: 'tech', label: 'Gadgets', value: 'gadgets' },
+            { category: 'lifestyle', label: 'Travel', value: 'travel' },
+            { category: 'lifestyle', label: 'Fitness', value: 'fitness' }
+        ];
+
         post.editionView()
             .title('Edit post "{{ entry.values.title }}"') // title() accepts a template string, which has access to the entry
             .actions(['list', 'show', 'delete']) // choose which buttons appear in the top action bar. Show is disabled by default
             .fields([
                 post.creationView().fields(), // fields() without arguments returns the list of fields. That way you can reuse fields from another view to avoid repetition
+                nga.field('category', 'choice') // a choice field is rendered as a dropdown in the edition view
+                    .choices([ // List the choice as object literals
+                        { label: 'Tech', value: 'tech' },
+                        { label: 'Lifestyle', value: 'lifestyle' }
+                    ]),
+                nga.field('subcategory', 'choice')
+                    .choices(function(entry) { // choices also accepts a function to return a list of choices based on the current entry
+                        return subCategories.filter(function (c) {
+                            return c.category === entry.values.category
+                        });
+                    }),
                 nga.field('tags', 'reference_many') // ReferenceMany translates to a select multiple
                     .targetEntity(tag)
                     .targetField(nga.field('name'))
+                    .filters(function(search) {
+                        return search ? { q: search } : null;
+                    })
+                    .remoteComplete(true, { refreshDelay: 300 })
                     .cssClasses('col-sm-4'), // customize look and feel through CSS classes
                 nga.field('pictures', 'json'),
                 nga.field('views', 'number')
+                    .cssClasses('col-sm-4'),
+                nga.field('average_note', 'float')
                     .cssClasses('col-sm-4'),
                 nga.field('comments', 'referenced_list') // display list of related comments
                     .targetEntity(comment)
                     .targetReferenceField('post_id')
                     .targetFields([
-                        nga.field('id'),
+                        nga.field('created_at').label('Posted'),
                         nga.field('body').label('Comment')
-                    ]),
+                    ])
+                    .sortField('created_at')
+                    .sortDir('DESC'),
                 nga.field('', 'template').label('')
                     .template('<span class="pull-right"><ma-filtered-list-button entity-name="comments" filter="{ post_id: entry.values.id }" size="sm"></ma-filtered-list-button></span>')
             ]);
@@ -131,39 +154,23 @@
                     .template('<send-email post="entry"></send-email>')
             ]);
 
-        comment.dashboardView()
-            .title('Last comments')
-            .order(2) // display the comment panel second in the dashboard
-            .perPage(5)
-            .fields([
-                nga.field('id'),
-                nga.field('body', 'wysiwyg')
-                    .label('Comment')
-                    .stripTags(true)
-                    .map(truncate),
-                nga.field(null, 'template') // template fields don't need a name in dashboard view
-                    .label('')
-                    .template('<post-link entry="entry"></post-link>') // you can use custom directives, too
-            ]);
 
         comment.listView()
             .title('Comments')
             .perPage(10) // limit the number of elements displayed per page. Default is 30.
             .fields([
                 nga.field('created_at', 'date')
-                    .label('Posted')
-                    .order(1),
+                    .label('Posted'),
+                nga.field('author.name')
+                    .label('Author'),
                 nga.field('body', 'wysiwyg')
                     .stripTags(true)
-                    .map(truncate)
-                    .order(3),
+                    .map(truncate),
                 nga.field('post_id', 'reference')
                     .label('Post')
                     .map(truncate)
                     .targetEntity(post)
                     .targetField(nga.field('title').map(truncate))
-                    .order(4),
-                nga.field('author').order(2)
             ])
             .filters([
                 nga.field('q', 'template')
@@ -186,13 +193,25 @@
                 nga.field('created_at', 'date')
                     .label('Posted')
                     .defaultValue(new Date()), // preset fields in creation view with defaultValue
-                nga.field('author'),
+                nga.field('author.name')
+                    .label('Author'),
                 nga.field('body', 'wysiwyg'),
                 nga.field('post_id', 'reference')
                     .label('Post')
                     .map(truncate)
+                    .filters(function(search) {
+                        if (!search) {
+                            return;
+                        }
+
+                        return {
+                            q: search // Full-text search
+                        };
+                    })
                     .targetEntity(post)
-                    .targetField(nga.field('title')),
+                    .targetField(nga.field('title'))
+                    .validation({ required: true })
+                    .remoteComplete(true, { refreshDelay: 0 })
             ]);
 
         comment.editionView()
@@ -205,15 +224,6 @@
         comment.deletionView()
             .title('Deletion confirmation'); // customize the deletion confirmation message
 
-        tag.dashboardView()
-            .title('Recent tags')
-            .order(3)
-            .perPage(10)
-            .fields([
-                nga.field('id'),
-                nga.field('name'),
-                nga.field('published', 'boolean').label('Is published ?')
-            ]);
 
         tag.listView()
             .infinitePagination(false) // by default, the list view uses infinite pagination. Set to false to use regulat pagination
@@ -239,6 +249,17 @@
                 nga.field('published', 'boolean')
             ]);
 
+        // customize header
+        var customHeaderTemplate =
+        '<div class="navbar-header">' +
+            '<a class="navbar-brand" href="#" ng-click="appController.displayHome()">ng-admin backend demo</a>' +
+        '</div>' +
+        '<p class="navbar-text navbar-right">' +
+            '<a href="https://github.com/marmelab/ng-admin/blob/master/examples/blog/config.js"><span class="glyphicon glyphicon-sunglasses"></span>&nbsp;View Source</a>' +
+        '</p>';
+        admin.header(customHeaderTemplate);
+
+        // customize menu
         admin.menu(nga.menu()
             .addChild(nga.menu(post).icon('<span class="glyphicon glyphicon-file"></span>')) // customize the entity menu icon
             .addChild(nga.menu(comment).icon('<strong style="font-size:1.3em;line-height:1em">✉</strong>')) // you can even use utf-8 symbols!
@@ -248,8 +269,97 @@
             )
         );
 
+        // customize dashboard
+        var customDashboardTemplate =
+        '<div class="row dashboard-starter"></div>' +
+        '<div class="row dashboard-content"><div class="col-lg-12"><div class="alert alert-info">' +
+            'Welcome to the demo! Fell free to explore and modify the data. We reset it every few minutes.' +
+        '</div></div></div>' +
+        '<div class="row dashboard-content">' +
+            '<div class="col-lg-12">' +
+                '<div class="panel panel-default">' +
+                    '<ma-dashboard-panel collection="dashboardController.collections.comments" entries="dashboardController.entries.comments"></ma-dashboard-panel>' +
+                '</div>' +
+            '</div>' +
+        '</div>' +
+        '<div class="row dashboard-content">' +
+            '<div class="col-lg-6">' +
+                '<div class="panel panel-green">' +
+                    '<ma-dashboard-panel collection="dashboardController.collections.recent_posts" entries="dashboardController.entries.recent_posts"></ma-dashboard-panel>' +
+                '</div>' +
+                '<div class="panel panel-green">' +
+                    '<ma-dashboard-panel collection="dashboardController.collections.popular_posts" entries="dashboardController.entries.popular_posts"></ma-dashboard-panel>' +
+                '</div>' +
+            '</div>' +
+            '<div class="col-lg-6">' +
+                '<div class="panel panel-yellow">' +
+                    '<ma-dashboard-panel collection="dashboardController.collections.tags" entries="dashboardController.entries.tags"></ma-dashboard-panel>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
+        admin.dashboard(nga.dashboard()
+            .addCollection(nga.collection(post)
+                .name('recent_posts')
+                .title('Recent posts')
+                .perPage(5) // limit the panel to the 5 latest posts
+                .fields([
+                    nga.field('published_at', 'date').label('Published').format('MMM d'),
+                    nga.field('title').isDetailLink(true).map(truncate),
+                    nga.field('views', 'number')
+                ])
+                .sortField('published_at')
+                .sortDir('DESC')
+                .order(1)
+            )
+            .addCollection(nga.collection(post)
+                .name('popular_posts')
+                .title('Popular posts')
+                .perPage(5) // limit the panel to the 5 latest posts
+                .fields([
+                    nga.field('published_at', 'date').label('Published').format('MMM d'),
+                    nga.field('title').isDetailLink(true).map(truncate),
+                    nga.field('views', 'number')
+                ])
+                .sortField('views')
+                .sortDir('DESC')
+                .order(3)
+            )
+            .addCollection(nga.collection(comment)
+                .title('Last comments')
+                .perPage(10)
+                .fields([
+                    nga.field('created_at', 'date')
+                        .label('Posted'),
+                    nga.field('body', 'wysiwyg')
+                        .label('Comment')
+                        .stripTags(true)
+                        .map(truncate)
+                        .isDetailLink(true),
+                    nga.field('post_id', 'reference')
+                        .label('Post')
+                        .map(truncate)
+                        .targetEntity(post)
+                        .targetField(nga.field('title').map(truncate))
+                ])
+                .sortField('created_at')
+                .sortDir('DESC')
+                .order(2)
+            )
+            .addCollection(nga.collection(tag)
+                .title('Tags publication status')
+                .perPage(10)
+                .fields([
+                    nga.field('name'),
+                    nga.field('published', 'boolean').label('Is published ?')
+                ])
+                .listActions(['show'])
+                .order(4)
+            )
+            .template(customDashboardTemplate)
+        );
+
         nga.configure(admin);
-    });
+    }]);
 
     app.directive('postLink', ['$location', function ($location) {
         return {
@@ -258,7 +368,7 @@
             template: '<p class="form-control-static"><a ng-click="displayPost()">View&nbsp;post</a></p>',
             link: function (scope) {
                 scope.displayPost = function () {
-                    $location.path('/show/posts/' + scope.entry().values.post_id);
+                    $location.path('/posts/show/' + scope.entry().values.post_id);
                 };
             }
         };
@@ -283,15 +393,15 @@
         this.postId = $stateParams.id;
         // notification is the service used to display notifications on the top of the screen
         this.notification = notification;
-    };
+    }
     sendPostController.prototype.sendEmail = function() {
         if (this.email) {
             this.notification.log('Email successfully sent to ' + this.email, {addnCls: 'humane-flatty-success'});
         } else {
             this.notification.log('Email is undefined', {addnCls: 'humane-flatty-error'});
         }
-    }
-    sendPostController.inject = ['$stateParams', 'notification'];
+    };
+    sendPostController.$inject = ['$stateParams', 'notification'];
 
     var sendPostControllerTemplate =
         '<div class="row"><div class="col-lg-12">' +
@@ -306,7 +416,7 @@
             '<div class="col-lg-5"><a class="btn btn-default" ng-click="controller.sendEmail()">Send</a></div>' +
         '</div>';
 
-    app.config(function ($stateProvider) {
+    app.config(['$stateProvider', function ($stateProvider) {
         $stateProvider.state('send-post', {
             parent: 'main',
             url: '/sendPost/:id',
@@ -315,7 +425,7 @@
             controllerAs: 'controller',
             template: sendPostControllerTemplate
         });
-    });
+    }]);
 
     // custom page with menu item
     var customPageTemplate = '<div class="row"><div class="col-lg-12">' +
@@ -325,12 +435,12 @@
                 '<p class="lead">You can add custom pages, too</p>' +
             '</div>' +
         '</div></div>';
-    app.config(function ($stateProvider) {
+    app.config(['$stateProvider', function ($stateProvider) {
         $stateProvider.state('stats', {
             parent: 'main',
             url: '/stats',
             template: customPageTemplate
         });
-    });
+    }]);
 
 }());
